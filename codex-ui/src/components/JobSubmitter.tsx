@@ -86,6 +86,7 @@ export const JobSubmitter: React.FC = () => {
         model: data.model,
         approvalMode: data.approvalMode,
         reasoningEffort: data.reasoningEffort,
+        useRealCodex: true, // Use real Codex by default
       };
 
       if (data.projectType || data.additionalInstructions) {

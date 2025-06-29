@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { db } from './services/database';
 import { setupWebSocket } from './api/websocket';
 import jobRoutes from './api/routes/jobs';
+import testRoutes from './api/routes/test';
 
 // Load environment variables
 dotenv.config();
@@ -28,6 +29,7 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api', jobRoutes);
+app.use('/api', testRoutes);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

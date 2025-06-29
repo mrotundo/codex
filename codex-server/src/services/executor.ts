@@ -3,10 +3,15 @@ import { EventType, JobParameters } from '../types';
 import { eventBus } from './eventBus';
 import { db } from './database';
 import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import * as readline from 'readline';
 
 export class CodexExecutor {
   private process: ChildProcess | null = null;
   private jobId: string | null = null;
+  private rl: readline.Interface | null = null;
+  private pendingApprovals: Map<string, string> = new Map(); // approval_id -> exec_id
+  private taskSubId: string | null = null;
 
   async execute(jobId: string, prompt: string, parameters: JobParameters): Promise<void> {
     this.jobId = jobId;
@@ -16,9 +21,14 @@ export class CodexExecutor {
       await db.updateJobStatus(jobId, 'running');
       await eventBus.emitEvent(jobId, EventType.JOB_STARTED, { prompt, parameters });
 
-      // For this prototype, we'll simulate the Codex execution
-      // In production, this would spawn the actual Codex CLI process
-      await this.simulateCodexExecution(jobId, prompt, parameters);
+      // Use real Codex CLI if available, otherwise fall back to simulation
+      const useRealCodex = parameters.useRealCodex !== false; // Default to true
+      
+      if (useRealCodex) {
+        await this.spawnCodexProcess(jobId, prompt, parameters);
+      } else {
+        await this.simulateCodexExecution(jobId, prompt, parameters);
+      }
 
       // Mark job as completed
       await db.updateJobStatus(jobId, 'completed');
@@ -158,46 +168,302 @@ drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
     prompt: string,
     parameters: JobParameters
   ): Promise<void> {
-    // This would be the real implementation
-    const codexPath = path.join(__dirname, '../../../codex-cli/dist/cli.js');
-    const args = ['--prompt', prompt];
-
-    if (parameters.model) args.push('--model', parameters.model);
-    if (parameters.approvalMode) args.push('--approval-mode', parameters.approvalMode);
-
-    this.process = spawn('node', [codexPath, ...args], {
-      cwd: parameters.workingDirectory || process.cwd(),
-      env: { ...process.env }
-    });
-
-    this.process.stdout?.on('data', (data) => {
-      this.parseAndEmitOutput(jobId, data.toString());
-    });
-
-    this.process.stderr?.on('data', (data) => {
-      eventBus.emitEvent(jobId, EventType.STDERR, { content: data.toString() });
-    });
-
+    // Try to use the Rust binary first, fall back to TypeScript CLI
+    const codexReleasePath = path.join(__dirname, '../../../target/release/codex');
+    const codexDebugPath = path.join(__dirname, '../../../target/debug/codex');
+    const codexRsPath = path.join(__dirname, '../../../codex-rs/target/release/codex');
+    const codexRsDebugPath = path.join(__dirname, '../../../codex-rs/target/debug/codex');
+    
+    // Import protocol types
+    const { createSubmission, parseEvent, stringifySubmission } = await import('./codex-protocol');
+    
     return new Promise((resolve, reject) => {
-      this.process!.on('exit', (code) => {
+      // Check which binary exists
+      const fs = require('fs');
+      let codexBinaryPath = '';
+      
+      if (fs.existsSync(codexReleasePath)) {
+        codexBinaryPath = codexReleasePath;
+      } else if (fs.existsSync(codexDebugPath)) {
+        codexBinaryPath = codexDebugPath;
+      } else if (fs.existsSync(codexRsPath)) {
+        codexBinaryPath = codexRsPath;
+      } else if (fs.existsSync(codexRsDebugPath)) {
+        codexBinaryPath = codexRsDebugPath;
+      }
+      
+      const useRustBinary = !!codexBinaryPath;
+      
+      console.log(`Using ${useRustBinary ? 'Rust' : 'TypeScript'} Codex implementation`);
+      
+      // Spawn Codex process with stdio pipes
+      if (useRustBinary) {
+        // Use Rust binary with proto subcommand
+        this.process = spawn(codexBinaryPath, ['proto'], {
+          cwd: parameters.workingDirectory || process.cwd(),
+          env: { 
+            ...process.env,
+            OPENAI_API_KEY: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
+            NO_COLOR: '1' // Disable color output for easier parsing
+          },
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+      } else {
+        // Fall back to TypeScript CLI (note: this doesn't support protocol mode)
+        console.warn('TypeScript CLI does not support protocol mode, falling back to simulation');
+        this.simulateCodexExecution(jobId, prompt, parameters).then(resolve).catch(reject);
+        return;
+      }
+
+      if (!this.process.stdin || !this.process.stdout) {
+        reject(new Error('Failed to create process streams'));
+        return;
+      }
+
+      // Create readline interface for parsing JSON messages
+      this.rl = readline.createInterface({
+        input: this.process.stdout,
+        crlfDelay: Infinity
+      });
+
+      // Handle process errors
+      this.process.on('error', (error) => {
+        console.error('Codex process error:', error);
+        reject(error);
+      });
+
+      this.process.on('exit', (code) => {
+        this.cleanup();
         if (code === 0) {
           resolve();
         } else {
-          reject(new Error(`Process exited with code ${code}`));
+          reject(new Error(`Codex process exited with code ${code}`));
         }
       });
+
+      // Handle stderr (errors and debug info)
+      this.process.stderr?.on('data', (data) => {
+        const stderr = data.toString();
+        console.error('Codex stderr:', stderr);
+        eventBus.emitEvent(jobId, EventType.STDERR, { content: stderr });
+      });
+
+      // Handle stdout (protocol messages)
+      this.rl.on('line', async (line) => {
+        await this.handleCodexMessage(jobId, line);
+      });
+
+      // Initialize session
+      this.taskSubId = uuidv4();
+      const configureSession = createSubmission(uuidv4(), {
+        type: 'ConfigureSession',
+        config: {
+          model: parameters.model || 'claude-3-5-sonnet-20241022',
+          approval_mode: parameters.approvalMode === 'auto' ? 'auto' : 'manual',
+          working_directory: parameters.workingDirectory
+        }
+      });
+      
+      this.process.stdin.write(stringifySubmission(configureSession));
+
+      // Send user input
+      const userInputSub = createSubmission(this.taskSubId, {
+        type: 'UserInput',
+        input: prompt,
+        last_response_id: parameters.lastResponseId
+      });
+      
+      this.process.stdin.write(stringifySubmission(userInputSub));
     });
   }
 
-  private parseAndEmitOutput(jobId: string, output: string): void {
-    // Parse Codex output and emit appropriate events
-    // This would need to be implemented based on Codex output format
+  private async handleCodexMessage(jobId: string, line: string): Promise<void> {
+    const { parseEvent, createSubmission, stringifySubmission } = await import('./codex-protocol');
+    
+    const event = parseEvent(line);
+    if (!event) {
+      console.log('Codex output (non-JSON):', line);
+      return;
+    }
+
+    console.log('Codex event:', event.msg.type, event);
+
+    switch (event.msg.type) {
+      case 'SessionConfigured':
+        console.log('Session configured');
+        break;
+
+      case 'TaskStarted':
+        console.log('Task started');
+        break;
+
+      case 'AgentMessage':
+        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
+          content: event.msg.content
+        });
+        break;
+
+      case 'AgentThinking':
+        await eventBus.emitEvent(jobId, EventType.AGENT_THINKING, {
+          message: event.msg.thinking
+        });
+        break;
+
+      case 'ExecApprovalRequest': {
+        const approvalId = await eventBus.emitApprovalRequest(
+          jobId,
+          'exec',
+          event.msg.context || 'Execute command',
+          event.msg.command,
+          undefined
+        );
+        
+        // Store mapping from our approval ID to Codex's exec ID
+        this.pendingApprovals.set(approvalId, event.msg.id);
+        
+        // Set up approval handler
+        this.handleApprovalResponse(jobId, approvalId, event.msg.id);
+        break;
+      }
+
+      case 'ExecStart':
+        await eventBus.emitEvent(jobId, EventType.TOOL_EXECUTING, {
+          tool: 'exec',
+          command: event.msg.command,
+          context: 'Executing command'
+        });
+        break;
+
+      case 'ExecOutput':
+        if (event.msg.stream === 'stdout') {
+          await eventBus.emitEvent(jobId, EventType.STDOUT, {
+            content: event.msg.output
+          });
+        } else {
+          await eventBus.emitEvent(jobId, EventType.STDERR, {
+            content: event.msg.output
+          });
+        }
+        break;
+
+      case 'ExecStop':
+        await eventBus.emitEvent(jobId, EventType.TOOL_COMPLETED, {
+          tool: 'exec',
+          command: '',
+          exitCode: event.msg.exit_code
+        });
+        break;
+
+      case 'PatchApprovalRequest':
+        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
+          content: `Patch requested for ${event.msg.path}`
+        });
+        break;
+
+      case 'PatchApplied':
+        await eventBus.emitEvent(jobId, EventType.FILE_CHANGED, {
+          path: event.msg.path,
+          action: 'modified'
+        });
+        break;
+
+      case 'FileChanged':
+        await eventBus.emitEvent(jobId, EventType.FILE_CHANGED, {
+          path: event.msg.path,
+          action: event.msg.action
+        });
+        break;
+
+      case 'TurnComplete':
+        // Store response ID for future use
+        console.log('Turn complete, response_id:', event.msg.response_id);
+        break;
+
+      case 'TaskComplete':
+        console.log('Task complete, response_id:', event.msg.response_id);
+        break;
+
+      case 'Error':
+        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
+          content: `Error: ${event.msg.error}`
+        });
+        break;
+    }
+  }
+
+  private async handleApprovalResponse(jobId: string, approvalId: string, execId: string): Promise<void> {
+    const { createSubmission, stringifySubmission } = await import('./codex-protocol');
+    
+    try {
+      const decision = await eventBus.waitForApproval(approvalId, 60000);
+      
+      console.log(`Sending approval decision to Codex: ${decision} for exec ${execId}`);
+      
+      const approvalSub = createSubmission(uuidv4(), {
+        type: 'ExecApproval',
+        approval: decision === 'approve' 
+          ? { type: 'Allow' }
+          : decision === 'always'
+          ? { type: 'AlwaysAllow' }
+          : { type: 'Deny' }
+      });
+      
+      if (this.process?.stdin) {
+        this.process.stdin.write(stringifySubmission(approvalSub));
+      }
+      
+      await eventBus.emitEvent(jobId, EventType.APPROVAL_RECEIVED, {
+        approvalId,
+        decision
+      });
+      
+    } catch (error: any) {
+      if (error.message === 'Approval timeout') {
+        // Send deny on timeout
+        const denySub = createSubmission(uuidv4(), {
+          type: 'ExecApproval',
+          approval: { type: 'Deny' }
+        });
+        
+        if (this.process?.stdin) {
+          this.process.stdin.write(stringifySubmission(denySub));
+        }
+        
+        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
+          content: 'Operation timed out waiting for approval.'
+        });
+      }
+      throw error;
+    }
+  }
+
+  private cleanup(): void {
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+    this.process = null;
+    this.pendingApprovals.clear();
+    this.taskSubId = null;
   }
 
   cancel(): void {
     if (this.process) {
-      this.process.kill();
-      this.process = null;
+      // Send interrupt message before killing
+      if (this.process.stdin) {
+        import('./codex-protocol').then(({ createSubmission, stringifySubmission }) => {
+          const interruptSub = createSubmission(uuidv4(), { type: 'Interrupt' });
+          this.process!.stdin!.write(stringifySubmission(interruptSub));
+        });
+      }
+      
+      // Give it a moment to clean up
+      setTimeout(() => {
+        if (this.process) {
+          this.process.kill();
+          this.cleanup();
+        }
+      }, 500);
     }
   }
 

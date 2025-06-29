@@ -2,13 +2,15 @@
 
 export interface JobParameters {
   model?: string;
-  approvalMode?: 'suggest' | 'auto-edit' | 'full-auto';
+  approvalMode?: 'suggest' | 'auto-edit' | 'full-auto' | 'auto' | 'manual';
   workingDirectory?: string;
   reasoningEffort?: 'low' | 'medium' | 'high';
   context?: {
     projectType?: string;
     additionalInstructions?: string;
   };
+  useRealCodex?: boolean;
+  lastResponseId?: string;
 }
 
 export interface Job {
