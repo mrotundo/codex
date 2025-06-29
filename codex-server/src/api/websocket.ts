@@ -44,7 +44,9 @@ export class WebSocketHandler {
       // Handle incoming messages
       ws.on('message', async (data: Buffer) => {
         try {
-          const message: ClientMessage = JSON.parse(data.toString());
+          const messageStr = data.toString();
+          console.log(`WebSocket received from client ${clientId}:`, messageStr);
+          const message: ClientMessage = JSON.parse(messageStr);
           await this.handleClientMessage(clientId, message);
         } catch (error) {
           console.error('Error handling WebSocket message:', error);
@@ -67,6 +69,8 @@ export class WebSocketHandler {
   private async handleClientMessage(clientId: string, message: ClientMessage): Promise<void> {
     const client = this.clients.get(clientId);
     if (!client) return;
+
+    console.log(`Handling message type: ${message.type} from client ${clientId}`);
 
     switch (message.type) {
       case 'subscribe':
@@ -177,12 +181,21 @@ export class WebSocketHandler {
 
   private async handleApprovalResponse(data: any): Promise<void> {
     const { approvalId, decision, comment } = data;
+    
+    console.log(`Received approval response: approvalId=${approvalId}, decision=${decision}, comment=${comment}`);
 
-    // Update database
-    await db.updateApproval(approvalId, decision, comment);
+    try {
+      // Update database
+      await db.updateApproval(approvalId, decision, comment);
+      console.log(`Database updated for approval ${approvalId}`);
+    } catch (error) {
+      console.error(`Error updating approval in database:`, error);
+    }
 
-    // Notify the executor
+    // Notify the executor (do this even if DB update fails)
     eventBus.notifyApprovalDecision(approvalId, decision);
+    
+    console.log(`Approval decision notified to executor for approvalId: ${approvalId}`);
   }
 
   private async handleCancelJob(jobId: string): Promise<void> {

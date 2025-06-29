@@ -33,6 +33,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ jobId }) => {
     isConnected,
     connectToJob,
     disconnectFromJob,
+    handleApproval,
   } = useJobStore();
 
   const [activeTab, setActiveTab] = React.useState(0);
@@ -138,7 +139,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ jobId }) => {
         <ApprovalDialog
           approval={pendingApproval}
           onDecision={(decision, comment) => {
-            useJobStore.getState().handleApproval(decision, comment);
+            handleApproval(decision, comment);
           }}
         />
       )}

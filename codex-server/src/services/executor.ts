@@ -14,7 +14,7 @@ export class CodexExecutor {
     try {
       // Update job status
       await db.updateJobStatus(jobId, 'running');
-      await eventBus.emit(jobId, EventType.JOB_STARTED, { prompt, parameters });
+      await eventBus.emitEvent(jobId, EventType.JOB_STARTED, { prompt, parameters });
 
       // For this prototype, we'll simulate the Codex execution
       // In production, this would spawn the actual Codex CLI process
@@ -22,11 +22,11 @@ export class CodexExecutor {
 
       // Mark job as completed
       await db.updateJobStatus(jobId, 'completed');
-      await eventBus.emit(jobId, EventType.JOB_COMPLETED, {});
+      await eventBus.emitEvent(jobId, EventType.JOB_COMPLETED, {});
 
     } catch (error: any) {
       await db.updateJobStatus(jobId, 'failed', error.message);
-      await eventBus.emit(jobId, EventType.JOB_FAILED, { error: error.message });
+      await eventBus.emitEvent(jobId, EventType.JOB_FAILED, { error: error.message });
       throw error;
     }
   }
@@ -37,19 +37,19 @@ export class CodexExecutor {
     parameters: JobParameters
   ): Promise<void> {
     // Simulate agent thinking
-    await eventBus.emit(jobId, EventType.AGENT_THINKING, { 
+    await eventBus.emitEvent(jobId, EventType.AGENT_THINKING, { 
       message: 'Analyzing your request...' 
     });
     await this.delay(1000);
 
     // Simulate agent message
-    await eventBus.emit(jobId, EventType.AGENT_MESSAGE, {
+    await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
       content: `I'll help you with: "${prompt}". Let me break this down into steps.`
     });
     await this.delay(1500);
 
     // Simulate planning
-    await eventBus.emit(jobId, EventType.AGENT_MESSAGE, {
+    await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
       content: `Here's my plan:
 1. First, I'll check the current project structure
 2. Then, I'll implement the requested changes
@@ -62,7 +62,7 @@ export class CodexExecutor {
     const command = 'ls -la';
     const context = 'Checking current directory structure';
 
-    await eventBus.emit(jobId, EventType.TOOL_EXECUTING, {
+    await eventBus.emitEvent(jobId, EventType.TOOL_EXECUTING, {
       tool,
       command,
       context
@@ -72,38 +72,46 @@ export class CodexExecutor {
     const approvalId = await eventBus.emitApprovalRequest(
       jobId,
       tool,
+      context,
       command,
-      undefined,
-      context
+      undefined
     );
 
     try {
+      console.log(`Waiting for approval with approvalId: ${approvalId}`);
+      
       // Wait for approval
       const decision = await eventBus.waitForApproval(approvalId, 60000);
       
-      await eventBus.emit(jobId, EventType.APPROVAL_RECEIVED, {
+      console.log(`Received approval decision: ${decision} for approvalId: ${approvalId}`);
+      
+      await eventBus.emitEvent(jobId, EventType.APPROVAL_RECEIVED, {
         approvalId,
         decision
       });
 
       if (decision === 'reject') {
-        await eventBus.emit(jobId, EventType.AGENT_MESSAGE, {
+        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
           content: 'Operation cancelled by user.'
         });
         return;
       }
 
+      // Wait a moment before showing output
+      await this.delay(500);
+
       // Simulate command output
-      await eventBus.emit(jobId, EventType.STDOUT, {
+      await eventBus.emitEvent(jobId, EventType.STDOUT, {
         content: `total 64
 drwxr-xr-x  10 user  staff   320 Jan 20 10:00 .
 drwxr-xr-x  15 user  staff   480 Jan 20 09:00 ..
 -rw-r--r--   1 user  staff  1234 Jan 20 10:00 README.md
 drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
--rw-r--r--   1 user  staff   890 Jan 20 10:00 package.json`
+-rw-r--r--   1 user  staff   890 Jan 20 10:00 package.json
+`
       });
 
-      await eventBus.emit(jobId, EventType.TOOL_COMPLETED, {
+      await eventBus.emitEvent(jobId, EventType.TOOL_COMPLETED, {
         tool,
         command,
         exitCode: 0
@@ -111,11 +119,11 @@ drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
 
       // Simulate file change
       await this.delay(1000);
-      await eventBus.emit(jobId, EventType.AGENT_MESSAGE, {
+      await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
         content: 'Now I\'ll create the requested component...'
       });
 
-      await eventBus.emit(jobId, EventType.FILE_CHANGED, {
+      await eventBus.emitEvent(jobId, EventType.FILE_CHANGED, {
         path: 'src/components/NewComponent.tsx',
         action: 'created',
         diff: `+import React from 'react';
@@ -131,13 +139,13 @@ drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
 
       // Final message
       await this.delay(1000);
-      await eventBus.emit(jobId, EventType.AGENT_MESSAGE, {
+      await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
         content: 'Task completed successfully! I\'ve created the new component as requested.'
       });
 
     } catch (error: any) {
       if (error.message === 'Approval timeout') {
-        await eventBus.emit(jobId, EventType.AGENT_MESSAGE, {
+        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
           content: 'Operation timed out waiting for approval.'
         });
       }
@@ -167,7 +175,7 @@ drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
     });
 
     this.process.stderr?.on('data', (data) => {
-      eventBus.emit(jobId, EventType.STDERR, { content: data.toString() });
+      eventBus.emitEvent(jobId, EventType.STDERR, { content: data.toString() });
     });
 
     return new Promise((resolve, reject) => {

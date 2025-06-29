@@ -224,10 +224,18 @@ export class DatabaseService {
   ): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
 
-    await this.db.run(
+    console.log(`Database: Updating approval ${id} with decision ${decision}`);
+    
+    const result = await this.db.run(
       `UPDATE approvals SET decision = ?, comment = ?, responded_at = ? WHERE id = ?`,
       [decision, comment, new Date().toISOString(), id]
     );
+    
+    console.log(`Database: Approval update result - changes: ${result.changes}`);
+    
+    if (result.changes === 0) {
+      console.warn(`Database: No approval found with id ${id}`);
+    }
   }
 
   async getApproval(id: string): Promise<ApprovalRequest | null> {

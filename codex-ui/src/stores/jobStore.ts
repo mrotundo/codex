@@ -193,7 +193,12 @@ export const useJobStore = create<JobState>((set, get) => ({
   handleApproval: (decision: 'approve' | 'reject' | 'always', comment?: string) => {
     const { currentJob, pendingApproval } = get();
     
-    if (!currentJob || !pendingApproval) return;
+    if (!currentJob || !pendingApproval) {
+      console.error('Cannot handle approval: currentJob or pendingApproval is missing');
+      return;
+    }
+    
+    console.log(`Sending approval response: jobId=${currentJob.id}, approvalId=${pendingApproval.approvalId}, decision=${decision}`);
     
     wsClient.sendApprovalResponse(
       currentJob.id,

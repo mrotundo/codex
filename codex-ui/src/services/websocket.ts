@@ -17,8 +17,10 @@ export class WebSocketClient {
 
   constructor() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
+    // Use the backend port directly for WebSocket connection
+    const host = window.location.hostname + ':4133';
     this.url = `${protocol}//${host}/ws`;
+    console.log('WebSocket URL:', this.url);
   }
 
   connect(jobId?: string): void {
@@ -46,6 +48,7 @@ export class WebSocketClient {
     this.ws.onmessage = (event) => {
       try {
         const message: ServerMessage = JSON.parse(event.data);
+        console.log('WebSocket received message:', message);
         this.handleMessage(message);
       } catch (error) {
         console.error('Failed to parse WebSocket message:', error);
@@ -137,7 +140,9 @@ export class WebSocketClient {
 
   private send(message: ClientMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
+      const messageStr = JSON.stringify(message);
+      console.log('WebSocket sending message:', messageStr);
+      this.ws.send(messageStr);
     } else {
       console.warn('WebSocket is not connected, cannot send message:', message);
     }

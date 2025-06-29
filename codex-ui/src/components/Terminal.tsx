@@ -83,9 +83,19 @@ export const Terminal: React.FC<TerminalProps> = ({ events }) => {
     if (!xtermRef.current) return;
 
     const term = xtermRef.current;
+    
+    // Clear terminal and replay all events from the beginning
+    term.clear();
+    
+    // Welcome message
+    term.writeln('\x1b[1;32mCodex Terminal\x1b[0m');
+    term.writeln('\x1b[90m────────────────────────────────────────\x1b[0m');
+    term.writeln('');
 
-    // Process new events
+    // Process all events
+    console.log(`Terminal: Processing ${events.length} events`);
     events.forEach((event) => {
+      console.log(`Terminal: Processing event type ${event.type}`, event.data);
       switch (event.type) {
         case EventType.TOOL_EXECUTING:
           if (event.data.command) {
@@ -95,19 +105,23 @@ export const Terminal: React.FC<TerminalProps> = ({ events }) => {
 
         case EventType.STDOUT:
           if (event.data.content) {
-            const lines = event.data.content.split('\n');
-            lines.forEach((line: string) => {
-              term.writeln(line);
-            });
+            // Write content directly, preserving formatting
+            term.write(event.data.content);
+            // Add newline if content doesn't end with one
+            if (!event.data.content.endsWith('\n')) {
+              term.write('\n');
+            }
           }
           break;
 
         case EventType.STDERR:
           if (event.data.content) {
-            const lines = event.data.content.split('\n');
-            lines.forEach((line: string) => {
-              term.writeln(`\x1b[1;31m${line}\x1b[0m`);
-            });
+            // Write error content in red
+            term.write(`\x1b[1;31m${event.data.content}\x1b[0m`);
+            // Add newline if content doesn't end with one
+            if (!event.data.content.endsWith('\n')) {
+              term.write('\n');
+            }
           }
           break;
 

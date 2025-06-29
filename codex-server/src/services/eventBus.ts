@@ -9,7 +9,7 @@ export class EventBus extends EventEmitter {
     this.setMaxListeners(100); // Support many WebSocket connections
   }
 
-  async emit(jobId: string, type: EventType, data: any): Promise<void> {
+  async emitEvent(jobId: string, type: EventType, data: any): Promise<void> {
     const event: Event = {
       id: uuidv4(),
       jobId,
@@ -33,9 +33,9 @@ export class EventBus extends EventEmitter {
   async emitApprovalRequest(
     jobId: string,
     tool: string,
+    context: string,
     command?: string,
-    operation?: string,
-    context: string
+    operation?: string
   ): Promise<string> {
     const approvalId = uuidv4();
     const approval: ApprovalRequest = {
@@ -52,7 +52,7 @@ export class EventBus extends EventEmitter {
     await db.createApproval(approval);
 
     // Emit approval event
-    await this.emit(jobId, EventType.APPROVAL_REQUIRED, {
+    await this.emitEvent(jobId, EventType.APPROVAL_REQUIRED, {
       approvalId,
       tool,
       command,
@@ -82,23 +82,32 @@ export class EventBus extends EventEmitter {
   }
 
   async waitForApproval(approvalId: string, timeout = 300000): Promise<string> {
+    console.log(`EventBus: Setting up approval listener for ${approvalId}`);
+    
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off(`approval-${approvalId}`, handler);
-        reject(new Error('Approval timeout'));
-      }, timeout);
-
       const handler = (decision: string) => {
+        console.log(`EventBus: Approval handler called with decision: ${decision}`);
         clearTimeout(timer);
         resolve(decision);
       };
 
+      // Set up listener FIRST
       this.once(`approval-${approvalId}`, handler);
+      console.log(`EventBus: Listener registered for approval-${approvalId}`);
+
+      const timer = setTimeout(() => {
+        console.log(`EventBus: Approval timeout for ${approvalId}`);
+        this.off(`approval-${approvalId}`, handler);
+        reject(new Error('Approval timeout'));
+      }, timeout);
     });
   }
 
   notifyApprovalDecision(approvalId: string, decision: string): void {
-    this.emit(`approval-${approvalId}`, decision);
+    console.log(`EventBus: Notifying approval decision for ${approvalId}: ${decision}`);
+    const hasListeners = this.listenerCount(`approval-${approvalId}`) > 0;
+    console.log(`EventBus: Has listeners for approval-${approvalId}: ${hasListeners}`);
+    super.emit(`approval-${approvalId}`, decision);
   }
 }
 
