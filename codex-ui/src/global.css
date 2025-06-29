@@ -1,0 +1,25 @@
+/* Global CSS reset and dark mode styles */
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Ensure dark mode colors work properly */
+html.dark {
+  color-scheme: dark;
+}
+
+/* Fix for Monaco Editor in dark mode */
+.monaco-editor {
+  color-scheme: dark;
+}
+
+/* Fix for MUI components in dark mode */
+.MuiPaper-root {
+  color-scheme: dark;
+}

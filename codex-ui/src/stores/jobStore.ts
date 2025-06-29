@@ -1,0 +1,230 @@
+import { create } from 'zustand';
+import { Job, Event, ApprovalRequest } from '../types';
+import { jobsApi } from '../services/api';
+import { wsClient } from '../services/websocket';
+
+interface JobState {
+  // Current job
+  currentJob: Job | null;
+  events: Event[];
+  pendingApproval: ApprovalRequest | null;
+  
+  // Job list
+  jobs: Job[];
+  totalJobs: number;
+  
+  // UI state
+  isLoading: boolean;
+  error: string | null;
+  isConnected: boolean;
+  
+  // Actions
+  createJob: (prompt: string, parameters?: any) => Promise<string>;
+  loadJob: (jobId: string) => Promise<void>;
+  loadJobs: (limit?: number, offset?: number) => Promise<void>;
+  cancelJob: (jobId: string) => Promise<void>;
+  
+  // WebSocket actions
+  connectToJob: (jobId: string) => void;
+  disconnectFromJob: () => void;
+  handleApproval: (decision: 'approve' | 'reject' | 'always', comment?: string) => void;
+  
+  // Event handlers
+  addEvent: (event: Event) => void;
+  setPendingApproval: (approval: ApprovalRequest | null) => void;
+  setConnected: (connected: boolean) => void;
+  clearError: () => void;
+}
+
+export const useJobStore = create<JobState>((set, get) => ({
+  // Initial state
+  currentJob: null,
+  events: [],
+  pendingApproval: null,
+  jobs: [],
+  totalJobs: 0,
+  isLoading: false,
+  error: null,
+  isConnected: false,
+
+  // Create a new job
+  createJob: async (prompt: string, parameters?: any) => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await jobsApi.create({ prompt, parameters });
+      return response.jobId;
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || error.message });
+      throw error;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  // Load a specific job
+  loadJob: async (jobId: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await jobsApi.get(jobId);
+      set({ 
+        currentJob: response.job, 
+        events: response.events,
+        pendingApproval: null 
+      });
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || error.message });
+      throw error;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  // Load job list
+  loadJobs: async (limit = 20, offset = 0) => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await jobsApi.list(limit, offset);
+      set({ 
+        jobs: response.jobs, 
+        totalJobs: response.total 
+      });
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || error.message });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  // Cancel a job
+  cancelJob: async (jobId: string) => {
+    try {
+      await jobsApi.cancel(jobId);
+      wsClient.cancelJob(jobId);
+      
+      // Update local state
+      set(state => ({
+        currentJob: state.currentJob?.id === jobId 
+          ? { ...state.currentJob, status: 'cancelled' }
+          : state.currentJob,
+        jobs: state.jobs.map(job => 
+          job.id === jobId ? { ...job, status: 'cancelled' as const } : job
+        )
+      }));
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || error.message });
+      throw error;
+    }
+  },
+
+  // Connect to job via WebSocket
+  connectToJob: (jobId: string) => {
+    // Setup WebSocket message handler
+    const unsubscribeMessage = wsClient.onMessage((message) => {
+      switch (message.type) {
+        case 'event':
+          if (message.data) {
+            get().addEvent(message.data);
+            
+            // Update job status based on events
+            if (message.data.type === 'job.completed' || 
+                message.data.type === 'job.failed' ||
+                message.data.type === 'job.cancelled') {
+              const status = message.data.type.split('.')[1] as Job['status'];
+              set(state => ({
+                currentJob: state.currentJob 
+                  ? { ...state.currentJob, status, completedAt: new Date() }
+                  : null
+              }));
+            } else if (message.data.type === 'job.started') {
+              set(state => ({
+                currentJob: state.currentJob 
+                  ? { ...state.currentJob, status: 'running', startedAt: new Date() }
+                  : null
+              }));
+            }
+          }
+          break;
+          
+        case 'approval_request':
+          set({ pendingApproval: message.data });
+          break;
+          
+        case 'connection_ack':
+          console.log('Connected to job:', message.data);
+          break;
+          
+        case 'error':
+          set({ error: message.data.error });
+          break;
+      }
+    });
+
+    // Setup connection status handler
+    const unsubscribeConnection = wsClient.onConnectionChange((connected) => {
+      set({ isConnected: connected });
+    });
+
+    // Connect and subscribe
+    wsClient.connect(jobId);
+
+    // Store unsubscribe functions for cleanup
+    (window as any).__wsUnsubscribe = () => {
+      unsubscribeMessage();
+      unsubscribeConnection();
+    };
+  },
+
+  // Disconnect from job
+  disconnectFromJob: () => {
+    if (get().currentJob) {
+      wsClient.unsubscribe(get().currentJob!.id);
+    }
+    
+    // Cleanup subscriptions
+    if ((window as any).__wsUnsubscribe) {
+      (window as any).__wsUnsubscribe();
+      delete (window as any).__wsUnsubscribe;
+    }
+    
+    set({ isConnected: false });
+  },
+
+  // Handle approval response
+  handleApproval: (decision: 'approve' | 'reject' | 'always', comment?: string) => {
+    const { currentJob, pendingApproval } = get();
+    
+    if (!currentJob || !pendingApproval) return;
+    
+    wsClient.sendApprovalResponse(
+      currentJob.id,
+      pendingApproval.approvalId,
+      decision,
+      comment
+    );
+    
+    // Clear pending approval
+    set({ pendingApproval: null });
+  },
+
+  // Add event to the list
+  addEvent: (event: Event) => {
+    set(state => ({
+      events: [...state.events, event]
+    }));
+  },
+
+  // Set pending approval
+  setPendingApproval: (approval: ApprovalRequest | null) => {
+    set({ pendingApproval: approval });
+  },
+
+  // Set connection status
+  setConnected: (connected: boolean) => {
+    set({ isConnected: connected });
+  },
+
+  // Clear error
+  clearError: () => {
+    set({ error: null });
+  },
+}));
