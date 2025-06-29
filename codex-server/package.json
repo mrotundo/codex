@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "db:init": "tsx src/services/database.ts init",
-    "db:migrate": "node migrate-db.js"
+    "db:migrate": "node migrate-db.js",
+    "dev:all": "concurrently -n \"backend,frontend\" -c \"yellow,cyan\" \"npm run dev\" \"cd ../codex-ui && npm run dev\""
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -28,6 +29,7 @@
     "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^8.35.0",
     "@typescript-eslint/parser": "^8.35.0",
+    "concurrently": "^9.2.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }
