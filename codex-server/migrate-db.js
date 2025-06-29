@@ -1,48 +1,84 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
+const sqlite3 = require('sqlite3');
+const { open } = require('sqlite');
 const path = require('path');
+const fs = require('fs').promises;
 
-const oldDbPath = path.join(__dirname, 'database/codex.db');
-const newDataDir = path.join(__dirname, 'data');
-const newDbPath = path.join(newDataDir, 'codex.db');
-
-async function migrateDatabase() {
-  console.log('Database Migration Tool');
-  console.log('======================');
+async function migrate() {
+  console.log('Running database migrations...');
   
-  // Check if old database exists
-  if (!fs.existsSync(oldDbPath)) {
-    console.log('No existing database found at old location. Nothing to migrate.');
-    return;
-  }
+  const dbPath = path.join(__dirname, 'data', 'codex.db');
+  
+  // Ensure data directory exists
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
+  
+  const db = await open({
+    filename: dbPath,
+    driver: sqlite3.Database
+  });
 
-  // Check if new database already exists
-  if (fs.existsSync(newDbPath)) {
-    console.log(`Database already exists at new location: ${newDbPath}`);
-    console.log('Migration skipped to avoid overwriting existing data.');
-    return;
-  }
-
-  // Create data directory if it doesn't exist
-  if (!fs.existsSync(newDataDir)) {
-    fs.mkdirSync(newDataDir, { recursive: true });
-    console.log(`Created data directory: ${newDataDir}`);
-  }
-
-  // Copy database to new location
   try {
-    fs.copyFileSync(oldDbPath, newDbPath);
-    console.log(`Successfully migrated database from:`);
-    console.log(`  ${oldDbPath}`);
-    console.log(`to:`);
-    console.log(`  ${newDbPath}`);
+    // Check if project_id column exists
+    const columns = await db.all(`PRAGMA table_info(jobs)`);
+    const hasProjectId = columns.some(col => col.name === 'project_id');
     
-    console.log('\nYou can now safely delete the old database directory if desired.');
+    if (!hasProjectId) {
+      console.log('Adding project_id column to jobs table...');
+      await db.exec(`ALTER TABLE jobs ADD COLUMN project_id TEXT`);
+      console.log('✓ Added project_id column');
+    }
+    
+    // Check if projects table exists
+    const tables = await db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name='projects'`);
+    const hasProjectsTable = tables.length > 0;
+    
+    if (!hasProjectsTable) {
+      console.log('Creating projects table...');
+      await db.exec(`
+        CREATE TABLE projects (
+          id TEXT PRIMARY KEY,
+          name TEXT,
+          path TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('✓ Created projects table');
+    }
+    
+    // Create indexes if they don't exist
+    const indexes = await db.all(`SELECT name FROM sqlite_master WHERE type='index'`);
+    const indexNames = indexes.map(idx => idx.name);
+    
+    if (!indexNames.includes('idx_jobs_project_id')) {
+      console.log('Creating project_id index...');
+      await db.exec(`CREATE INDEX idx_jobs_project_id ON jobs(project_id)`);
+      console.log('✓ Created project_id index');
+    }
+    
+    if (!indexNames.includes('idx_projects_name')) {
+      console.log('Creating projects name index...');
+      await db.exec(`CREATE INDEX idx_projects_name ON projects(name)`);
+      console.log('✓ Created projects name index');
+    }
+    
+    console.log('Database migration completed successfully!');
+    
   } catch (error) {
-    console.error('Error migrating database:', error.message);
-    process.exit(1);
+    console.error('Migration failed:', error);
+    throw error;
+  } finally {
+    await db.close();
   }
 }
 
-migrateDatabase();
+// Run migration if called directly
+if (require.main === module) {
+  migrate().catch(err => {
+    console.error('Migration error:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { migrate };

@@ -2,6 +2,11 @@
 
 # Alternative startup script that runs servers in parallel properly
 
+# Load nvm and use Node 22
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use 22
+
 echo "Starting Codex API Server and UI..."
 
 # Function to handle cleanup

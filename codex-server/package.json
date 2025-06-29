@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "db:init": "tsx src/services/database.ts init",
     "db:migrate": "node migrate-db.js",
+    "db:migrate:location": "node migrate-db-location.js",
     "dev:all": "concurrently -n \"backend,frontend\" -c \"yellow,cyan\" \"npm run dev\" \"cd ../codex-ui && npm run dev\""
   },
   "dependencies": {

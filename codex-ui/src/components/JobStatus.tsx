@@ -100,6 +100,13 @@ export const JobStatus: React.FC<JobStatusProps> = ({ job, isConnected }) => {
                   className="bg-purple-500/20 text-purple-300"
                 />
               )}
+              {job.projectId && (
+                <Chip
+                  label={`📁 ${job.projectId}`}
+                  size="small"
+                  className="bg-blue-500/20 text-blue-300"
+                />
+              )}
             </div>
             <p className="text-sm text-gray-400 mt-1 line-clamp-1">
               {job.prompt}

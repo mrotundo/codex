@@ -4,12 +4,12 @@ export interface JobParameters {
   model?: string;
   approvalMode?: 'suggest' | 'auto-edit' | 'full-auto' | 'auto' | 'manual';
   workingDirectory?: string;
+  projectId?: string;
   reasoningEffort?: 'low' | 'medium' | 'high';
   context?: {
     projectType?: string;
     additionalInstructions?: string;
   };
-  useRealCodex?: boolean;
   lastResponseId?: string;
 }
 
@@ -17,6 +17,7 @@ export interface Job {
   id: string;
   prompt: string;
   parameters: JobParameters;
+  projectId?: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   createdAt: Date;
   startedAt?: Date;
@@ -85,11 +86,13 @@ export interface ServerMessage {
 // API types
 export interface CreateJobRequest {
   prompt: string;
+  projectId?: string;
   parameters?: JobParameters;
 }
 
 export interface CreateJobResponse {
   jobId: string;
+  projectId: string;
   status: string;
   createdAt: string;
 }

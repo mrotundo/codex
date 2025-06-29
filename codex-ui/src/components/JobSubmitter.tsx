@@ -27,6 +27,7 @@ import { useJobStore } from '../stores/jobStore';
 
 interface FormData {
   prompt: string;
+  projectId?: string;
   model: string;
   approvalMode: 'suggest' | 'auto-edit' | 'full-auto';
   reasoningEffort: 'low' | 'medium' | 'high';
@@ -86,7 +87,6 @@ export const JobSubmitter: React.FC = () => {
         model: data.model,
         approvalMode: data.approvalMode,
         reasoningEffort: data.reasoningEffort,
-        useRealCodex: true, // Use real Codex by default
       };
 
       if (data.projectType || data.additionalInstructions) {
@@ -96,7 +96,7 @@ export const JobSubmitter: React.FC = () => {
         };
       }
 
-      const jobId = await createJob(data.prompt, parameters);
+      const jobId = await createJob(data.prompt, data.projectId, parameters);
       toast.success('Job created successfully!');
       reset();
       navigate(`/jobs/${jobId}`);
@@ -134,6 +134,19 @@ export const JobSubmitter: React.FC = () => {
             error={!!errors.prompt}
             helperText={errors.prompt?.message}
             placeholder="Example: Create a React component for user authentication with login and signup forms"
+            className="bg-dark-surface"
+            InputProps={{
+              className: 'text-gray-100',
+            }}
+          />
+
+          {/* Project ID Input */}
+          <TextField
+            {...register('projectId')}
+            label="Project ID (optional)"
+            fullWidth
+            placeholder="my-project"
+            helperText="Enter a project ID to organize your work. If left empty, one will be auto-generated."
             className="bg-dark-surface"
             InputProps={{
               className: 'text-gray-100',

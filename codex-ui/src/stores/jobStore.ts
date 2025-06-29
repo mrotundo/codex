@@ -19,7 +19,7 @@ interface JobState {
   isConnected: boolean;
   
   // Actions
-  createJob: (prompt: string, parameters?: any) => Promise<string>;
+  createJob: (prompt: string, projectId?: string, parameters?: any) => Promise<string>;
   loadJob: (jobId: string) => Promise<void>;
   loadJobs: (limit?: number, offset?: number) => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
@@ -48,10 +48,10 @@ export const useJobStore = create<JobState>((set, get) => ({
   isConnected: false,
 
   // Create a new job
-  createJob: async (prompt: string, parameters?: any) => {
+  createJob: async (prompt: string, projectId?: string, parameters?: any) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await jobsApi.create({ prompt, parameters });
+      const response = await jobsApi.create({ prompt, projectId, parameters });
       return response.jobId;
     } catch (error: any) {
       set({ error: error.response?.data?.error || error.message });

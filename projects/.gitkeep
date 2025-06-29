@@ -1,0 +1,2 @@
+# This directory contains project workspaces
+# Each project will have its own subdirectory created when a job is run with a project ID

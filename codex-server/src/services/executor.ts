@@ -17,18 +17,28 @@ export class CodexExecutor {
     this.jobId = jobId;
 
     try {
+      // Always use a project directory
+      const projectsRoot = path.join(__dirname, '../../../projects');
+      
+      // Use provided project ID or generate one based on job ID
+      const projectId = parameters.projectId || `project-${jobId.substring(0, 8)}`;
+      
+      const project = await db.getOrCreateProject(projectId, projectsRoot);
+      const workingDirectory = project.path;
+      
+      await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
+        content: `Working in project: ${projectId} (${project.path})`
+      });
+
       // Update job status
       await db.updateJobStatus(jobId, 'running');
-      await eventBus.emitEvent(jobId, EventType.JOB_STARTED, { prompt, parameters });
+      await eventBus.emitEvent(jobId, EventType.JOB_STARTED, { prompt, parameters, workingDirectory });
 
-      // Use real Codex CLI if available, otherwise fall back to simulation
-      const useRealCodex = parameters.useRealCodex !== false; // Default to true
+      // Update parameters with resolved working directory
+      const updatedParameters = { ...parameters, workingDirectory };
       
-      if (useRealCodex) {
-        await this.spawnCodexProcess(jobId, prompt, parameters);
-      } else {
-        await this.simulateCodexExecution(jobId, prompt, parameters);
-      }
+      // Always use real Codex CLI - no simulation
+      await this.spawnCodexProcess(jobId, prompt, updatedParameters);
 
       // Mark job as completed
       await db.updateJobStatus(jobId, 'completed');
@@ -41,186 +51,74 @@ export class CodexExecutor {
     }
   }
 
-  private async simulateCodexExecution(
-    jobId: string, 
-    prompt: string, 
-    parameters: JobParameters
-  ): Promise<void> {
-    // Simulate agent thinking
-    await eventBus.emitEvent(jobId, EventType.AGENT_THINKING, { 
-      message: 'Analyzing your request...' 
-    });
-    await this.delay(1000);
-
-    // Simulate agent message
-    await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
-      content: `I'll help you with: "${prompt}". Let me break this down into steps.`
-    });
-    await this.delay(1500);
-
-    // Simulate planning
-    await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
-      content: `Here's my plan:
-1. First, I'll check the current project structure
-2. Then, I'll implement the requested changes
-3. Finally, I'll run tests to ensure everything works`
-    });
-    await this.delay(1000);
-
-    // Simulate tool execution with approval
-    const tool = 'shell';
-    const command = 'ls -la';
-    const context = 'Checking current directory structure';
-
-    await eventBus.emitEvent(jobId, EventType.TOOL_EXECUTING, {
-      tool,
-      command,
-      context
-    });
-
-    // Request approval
-    const approvalId = await eventBus.emitApprovalRequest(
-      jobId,
-      tool,
-      context,
-      command,
-      undefined
-    );
-
-    try {
-      console.log(`Waiting for approval with approvalId: ${approvalId}`);
-      
-      // Wait for approval
-      const decision = await eventBus.waitForApproval(approvalId, 60000);
-      
-      console.log(`Received approval decision: ${decision} for approvalId: ${approvalId}`);
-      
-      await eventBus.emitEvent(jobId, EventType.APPROVAL_RECEIVED, {
-        approvalId,
-        decision
-      });
-
-      if (decision === 'reject') {
-        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
-          content: 'Operation cancelled by user.'
-        });
-        return;
-      }
-
-      // Wait a moment before showing output
-      await this.delay(500);
-
-      // Simulate command output
-      await eventBus.emitEvent(jobId, EventType.STDOUT, {
-        content: `total 64
-drwxr-xr-x  10 user  staff   320 Jan 20 10:00 .
-drwxr-xr-x  15 user  staff   480 Jan 20 09:00 ..
--rw-r--r--   1 user  staff  1234 Jan 20 10:00 README.md
-drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
--rw-r--r--   1 user  staff   890 Jan 20 10:00 package.json
-`
-      });
-
-      await eventBus.emitEvent(jobId, EventType.TOOL_COMPLETED, {
-        tool,
-        command,
-        exitCode: 0
-      });
-
-      // Simulate file change
-      await this.delay(1000);
-      await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
-        content: 'Now I\'ll create the requested component...'
-      });
-
-      await eventBus.emitEvent(jobId, EventType.FILE_CHANGED, {
-        path: 'src/components/NewComponent.tsx',
-        action: 'created',
-        diff: `+import React from 'react';
-+
-+export const NewComponent: React.FC = () => {
-+  return (
-+    <div className="new-component">
-+      <h1>Hello from New Component!</h1>
-+    </div>
-+  );
-+};`
-      });
-
-      // Final message
-      await this.delay(1000);
-      await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
-        content: 'Task completed successfully! I\'ve created the new component as requested.'
-      });
-
-    } catch (error: any) {
-      if (error.message === 'Approval timeout') {
-        await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
-          content: 'Operation timed out waiting for approval.'
-        });
-      }
-      throw error;
-    }
-  }
 
   private async spawnCodexProcess(
     jobId: string,
     prompt: string,
     parameters: JobParameters
   ): Promise<void> {
-    // Try to use the Rust binary first, fall back to TypeScript CLI
-    const codexReleasePath = path.join(__dirname, '../../../target/release/codex');
-    const codexDebugPath = path.join(__dirname, '../../../target/debug/codex');
-    const codexRsPath = path.join(__dirname, '../../../codex-rs/target/release/codex');
-    const codexRsDebugPath = path.join(__dirname, '../../../codex-rs/target/debug/codex');
-    
-    // Import protocol types
-    const { createSubmission, parseEvent, stringifySubmission } = await import('./codex-protocol');
-    
     return new Promise((resolve, reject) => {
-      // Check which binary exists
       const fs = require('fs');
-      let codexBinaryPath = '';
       
-      if (fs.existsSync(codexReleasePath)) {
-        codexBinaryPath = codexReleasePath;
-      } else if (fs.existsSync(codexDebugPath)) {
-        codexBinaryPath = codexDebugPath;
-      } else if (fs.existsSync(codexRsPath)) {
-        codexBinaryPath = codexRsPath;
-      } else if (fs.existsSync(codexRsDebugPath)) {
-        codexBinaryPath = codexRsDebugPath;
-      }
-      
-      const useRustBinary = !!codexBinaryPath;
-      
-      console.log(`Using ${useRustBinary ? 'Rust' : 'TypeScript'} Codex implementation`);
-      
-      // Spawn Codex process with stdio pipes
-      if (useRustBinary) {
-        // Use Rust binary with proto subcommand
-        this.process = spawn(codexBinaryPath, ['proto'], {
-          cwd: parameters.workingDirectory || process.cwd(),
-          env: { 
-            ...process.env,
-            OPENAI_API_KEY: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
-            NO_COLOR: '1' // Disable color output for easier parsing
-          },
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-      } else {
-        // Fall back to TypeScript CLI (note: this doesn't support protocol mode)
-        console.warn('TypeScript CLI does not support protocol mode, falling back to simulation');
-        this.simulateCodexExecution(jobId, prompt, parameters).then(resolve).catch(reject);
+      // Check Node.js version first
+      const nodeVersion = process.version;
+      const majorVersion = parseInt(nodeVersion.split('.')[0].substring(1));
+      if (majorVersion < 22) {
+        const error = `Codex CLI requires Node.js 22 or higher. Current version: ${nodeVersion}`;
+        console.error(error);
+        reject(new Error(error));
         return;
       }
+      
+      // Try to find the Codex TypeScript CLI
+      const codexCliPath = path.join(__dirname, '../../../codex-cli/bin/codex.js');
+      
+      if (!fs.existsSync(codexCliPath)) {
+        const error = `Codex CLI not found at ${codexCliPath}`;
+        console.error(error);
+        reject(new Error(error));
+        return;
+      }
+      
+      console.log('Using Codex TypeScript CLI in quiet mode');
+      console.log('API Key available:', !!process.env.OPENAI_API_KEY);
+      
+      // Prepare CLI arguments
+      const args = [
+        '-q', // quiet mode
+        prompt
+      ];
+      
+      // Add model if specified
+      if (parameters.model) {
+        args.unshift('-m', parameters.model);
+      }
+      
+      // Add approval mode
+      if (parameters.approvalMode === 'full-auto') {
+        args.unshift('--full-auto');
+      } else if (parameters.approvalMode === 'auto-edit') {
+        args.unshift('--auto-edit');
+      }
+      
+      // Spawn Codex CLI process in quiet mode
+      this.process = spawn('node', [codexCliPath, ...args], {
+        cwd: parameters.workingDirectory || process.cwd(),
+        env: { 
+          ...process.env,
+          OPENAI_API_KEY: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
+          NO_COLOR: '1', // Disable color output for easier parsing
+          CODEX_QUIET_MODE: '1'
+        },
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
 
-      if (!this.process.stdin || !this.process.stdout) {
+      if (!this.process.stdout) {
         reject(new Error('Failed to create process streams'));
         return;
       }
 
-      // Create readline interface for parsing JSON messages
+      // Create readline interface for parsing line-by-line output
       this.rl = readline.createInterface({
         input: this.process.stdout,
         crlfDelay: Infinity
@@ -248,33 +146,91 @@ drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
         eventBus.emitEvent(jobId, EventType.STDERR, { content: stderr });
       });
 
-      // Handle stdout (protocol messages)
+      // Handle stdout (quiet mode output)
       this.rl.on('line', async (line) => {
-        await this.handleCodexMessage(jobId, line);
+        await this.handleCodexQuietModeOutput(jobId, line);
       });
 
-      // Initialize session
-      this.taskSubId = uuidv4();
-      const configureSession = createSubmission(uuidv4(), {
-        type: 'ConfigureSession',
-        config: {
-          model: parameters.model || 'claude-3-5-sonnet-20241022',
-          approval_mode: parameters.approvalMode === 'auto' ? 'auto' : 'manual',
-          working_directory: parameters.workingDirectory
-        }
-      });
-      
-      this.process.stdin.write(stringifySubmission(configureSession));
-
-      // Send user input
-      const userInputSub = createSubmission(this.taskSubId, {
-        type: 'UserInput',
-        input: prompt,
-        last_response_id: parameters.lastResponseId
-      });
-      
-      this.process.stdin.write(stringifySubmission(userInputSub));
+      // In quiet mode, the CLI starts automatically with the provided prompt
+      // No need to send additional input
     });
+  }
+
+  private async handleCodexQuietModeOutput(jobId: string, line: string): Promise<void> {
+    // In quiet mode, the CLI outputs JSON messages
+    console.log('Codex output:', line);
+    
+    try {
+      const msg = JSON.parse(line);
+      
+      switch (msg.type) {
+        case 'message':
+          if (msg.role === 'assistant' && msg.content) {
+            // Extract text from content array
+            const text = msg.content
+              .filter((c: any) => c.type === 'output_text')
+              .map((c: any) => c.text)
+              .join('');
+            
+            if (text) {
+              await eventBus.emitEvent(jobId, EventType.AGENT_MESSAGE, {
+                content: text
+              });
+            }
+          }
+          break;
+          
+        case 'reasoning':
+          // Reasoning event - could show thinking indicator
+          await eventBus.emitEvent(jobId, EventType.AGENT_THINKING, {
+            message: 'Thinking...'
+          });
+          break;
+          
+        case 'function_call':
+          // Function/tool call
+          const toolName = msg.name || 'shell';
+          const args = msg.arguments ? JSON.parse(msg.arguments) : {};
+          const command = args.command ? 
+            (Array.isArray(args.command) ? args.command.join(' ') : args.command) : 
+            msg.name;
+          
+          await eventBus.emitEvent(jobId, EventType.TOOL_EXECUTING, {
+            tool: toolName,
+            command: command,
+            context: 'Executing command'
+          });
+          break;
+          
+        case 'function_call_output':
+          // Tool output
+          if (msg.output) {
+            await eventBus.emitEvent(jobId, EventType.STDOUT, {
+              content: msg.output
+            });
+          }
+          
+          // Check for exit code in metadata
+          const exitCode = msg.metadata?.exit_code ?? 0;
+          await eventBus.emitEvent(jobId, EventType.TOOL_COMPLETED, {
+            tool: 'shell',
+            command: '',
+            exitCode: exitCode
+          });
+          break;
+          
+        default:
+          // Log unhandled message types
+          console.log('Unhandled Codex message type:', msg.type, msg);
+      }
+    } catch (error) {
+      // If not JSON, treat as plain text output
+      if (line.trim()) {
+        await eventBus.emitEvent(jobId, EventType.STDOUT, {
+          content: line + '\n'
+        });
+      }
+    }
   }
 
   private async handleCodexMessage(jobId: string, line: string): Promise<void> {
@@ -467,9 +423,6 @@ drwxr-xr-x   8 user  staff   256 Jan 20 10:00 src
     }
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
 }
 
 // Create singleton instance

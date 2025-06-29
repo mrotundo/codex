@@ -10,6 +10,7 @@ const router = Router();
 // Validation schemas
 const createJobSchema = z.object({
   prompt: z.string().min(1).max(10000),
+  projectId: z.string().optional(),
   parameters: z.object({
     model: z.string().optional(),
     approvalMode: z.enum(['suggest', 'auto-edit', 'full-auto']).optional(),
@@ -34,24 +35,30 @@ router.post('/jobs', async (req: Request, res: Response) => {
       });
     }
 
-    const { prompt, parameters = {} } = result.data;
+    const { prompt, projectId: userProjectId, parameters = {} } = result.data;
 
     // Create job
     const jobId = uuidv4();
+    
+    // Use provided project ID or generate one
+    const projectId = userProjectId || `project-${jobId.substring(0, 8)}`;
+    
     const job = await db.createJob({
       id: jobId,
       prompt,
-      parameters,
+      parameters: { ...parameters, projectId },
+      projectId,
       status: 'queued'
     });
 
     // Start execution asynchronously
-    executor.execute(jobId, prompt, parameters).catch(error => {
+    executor.execute(jobId, prompt, { ...parameters, projectId }).catch(error => {
       console.error(`Job ${jobId} failed:`, error);
     });
 
     const response: CreateJobResponse = {
       jobId: job.id,
+      projectId: projectId,
       status: job.status,
       createdAt: job.createdAt.toISOString()
     };
@@ -146,6 +153,17 @@ router.get('/jobs/:id/events', async (req: Request, res: Response) => {
     res.json({ events });
   } catch (error) {
     console.error('Error getting events:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// List projects
+router.get('/projects', async (_req: Request, res: Response) => {
+  try {
+    const projects = await db.listProjects();
+    res.json({ projects });
+  } catch (error) {
+    console.error('Error listing projects:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

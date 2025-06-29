@@ -8,8 +8,8 @@ import { setupWebSocket } from './api/websocket';
 import jobRoutes from './api/routes/jobs';
 import testRoutes from './api/routes/test';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from project root
+dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 const app = express();
 const PORT = process.env.PORT || 4133;
@@ -49,6 +49,10 @@ setupWebSocket(server);
 // Initialize database and start server
 async function startServer() {
   try {
+    // Run migrations first
+    const { migrate } = require('../migrate-db');
+    await migrate();
+    
     console.log('Initializing database...');
     await db.initialize();
     console.log('Database initialized');

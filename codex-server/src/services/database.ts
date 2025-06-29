@@ -37,6 +37,7 @@ export class DatabaseService {
         id TEXT PRIMARY KEY,
         prompt TEXT NOT NULL,
         parameters TEXT,
+        project_id TEXT,
         status TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         started_at DATETIME,
@@ -74,11 +75,24 @@ export class DatabaseService {
       )
     `);
 
+    // Projects table
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        path TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Create indexes
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_events_job_id ON events(job_id);
       CREATE INDEX IF NOT EXISTS idx_approvals_job_id ON approvals(job_id);
       CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+      CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON jobs(project_id);
+      CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
     `);
   }
 
@@ -86,10 +100,10 @@ export class DatabaseService {
   async createJob(job: Omit<Job, 'createdAt'>): Promise<Job> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const { id, prompt, parameters, status } = job;
+    const { id, prompt, parameters, projectId, status } = job;
     await this.db.run(
-      `INSERT INTO jobs (id, prompt, parameters, status) VALUES (?, ?, ?, ?)`,
-      [id, prompt, JSON.stringify(parameters), status]
+      `INSERT INTO jobs (id, prompt, parameters, project_id, status) VALUES (?, ?, ?, ?, ?)`,
+      [id, prompt, JSON.stringify(parameters), projectId || null, status]
     );
 
     return this.getJob(id) as Promise<Job>;
@@ -109,6 +123,7 @@ export class DatabaseService {
       id: row.id,
       prompt: row.prompt,
       parameters: JSON.parse(row.parameters || '{}'),
+      projectId: row.project_id,
       status: row.status,
       createdAt: new Date(row.created_at),
       startedAt: row.started_at ? new Date(row.started_at) : undefined,
@@ -278,6 +293,56 @@ export class DatabaseService {
       context: row.context,
       createdAt: new Date(row.created_at)
     };
+  }
+
+  // Project methods
+  async getOrCreateProject(projectId: string, projectsRoot: string): Promise<{ id: string; path: string }> {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    // Sanitize project ID for filesystem
+    const sanitizedId = projectId.replace(/[^a-zA-Z0-9-_]/g, '_');
+    const projectPath = path.join(projectsRoot, sanitizedId);
+    
+    // Check if project exists in database
+    const existing = await this.db.get(
+      `SELECT * FROM projects WHERE id = ?`,
+      [sanitizedId]
+    );
+    
+    if (existing) {
+      // Update last accessed time
+      await this.db.run(
+        `UPDATE projects SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?`,
+        [sanitizedId]
+      );
+      return { id: existing.id, path: existing.path };
+    }
+    
+    // Create new project
+    await this.db.run(
+      `INSERT INTO projects (id, name, path) VALUES (?, ?, ?)`,
+      [sanitizedId, projectId, projectPath]
+    );
+    
+    // Create project directory
+    await fs.mkdir(projectPath, { recursive: true });
+    
+    return { id: sanitizedId, path: projectPath };
+  }
+
+  async listProjects(): Promise<Array<{ id: string; name: string; path: string; lastAccessed: Date }>> {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const rows = await this.db.all(
+      `SELECT * FROM projects ORDER BY last_accessed DESC`
+    );
+    
+    return rows.map(row => ({
+      id: row.id,
+      name: row.name || row.id,
+      path: row.path,
+      lastAccessed: new Date(row.last_accessed)
+    }));
   }
 
   async close(): Promise<void> {
