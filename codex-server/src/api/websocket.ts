@@ -97,6 +97,12 @@ export class WebSocketHandler {
         }
         break;
 
+      case 'user_response':
+        if (message.data) {
+          await this.handleUserResponse(message.data);
+        }
+        break;
+
       case 'ping':
         this.sendMessage(client.ws, { type: 'pong', data: {} });
         break;
@@ -107,12 +113,20 @@ export class WebSocketHandler {
   }
 
   private async handleSubscribe(clientId: string, jobId: string): Promise<void> {
+    console.log(`[WebSocket] handleSubscribe called - clientId: ${clientId}, jobId: ${jobId}`);
+    
     const client = this.clients.get(clientId);
-    if (!client) return;
+    if (!client) {
+      console.log(`[WebSocket] Client ${clientId} not found in handleSubscribe`);
+      return;
+    }
 
     // Check if job exists
     const job = await db.getJob(jobId);
+    console.log(`[WebSocket] Job lookup result:`, job ? { id: job.id, status: job.status } : 'null');
+    
     if (!job) {
+      console.log(`[WebSocket] Job ${jobId} not found, sending error`);
       this.sendError(client.ws, 'Job not found');
       return;
     }
@@ -136,7 +150,15 @@ export class WebSocketHandler {
 
     // Send any existing events
     const events = await db.getEvents(jobId);
+    console.log(`[WebSocket] Sending ${events.length} existing events to client ${clientId}`);
+    
     for (const event of events) {
+      console.log(`[WebSocket] Sending existing event:`, {
+        eventId: event.id,
+        eventType: event.type,
+        jobId: event.jobId
+      });
+      
       this.sendMessage(client.ws, {
         type: 'event',
         jobId,
@@ -204,6 +226,17 @@ export class WebSocketHandler {
     await db.updateJobStatus(jobId, 'cancelled');
   }
 
+  private async handleUserResponse(data: any): Promise<void> {
+    const { inputId, response } = data;
+    
+    console.log(`Received user response: inputId=${inputId}, response=${response}`);
+
+    // Notify the executor
+    eventBus.notifyUserResponse(inputId, response);
+    
+    console.log(`User response notified to executor for inputId: ${inputId}`);
+  }
+
   private handleDisconnect(clientId: string): void {
     const client = this.clients.get(clientId);
     if (!client) return;
@@ -226,8 +259,21 @@ export class WebSocketHandler {
   private setupEventListeners(): void {
     // Listen for all job events
     eventBus.subscribeToAllJobs((event: Event) => {
+      console.log(`[WebSocket] Event received from eventBus:`, {
+        eventId: event.id,
+        jobId: event.jobId,
+        type: event.type,
+        timestamp: event.timestamp,
+        dataKeys: event.data ? Object.keys(event.data) : []
+      });
+      
       const subscribers = this.jobSubscriptions.get(event.jobId);
-      if (!subscribers || subscribers.size === 0) return;
+      console.log(`[WebSocket] Job ${event.jobId} has ${subscribers?.size || 0} subscribers`);
+      
+      if (!subscribers || subscribers.size === 0) {
+        console.log(`[WebSocket] No subscribers for job ${event.jobId}, skipping event`);
+        return;
+      }
 
       const message: ServerMessage = {
         type: 'event',
@@ -237,6 +283,7 @@ export class WebSocketHandler {
 
       // Special handling for approval requests
       if (event.type === 'approval.required') {
+        console.log(`[WebSocket] Processing approval request event`);
         const approvalMessage: ServerMessage = {
           type: 'approval_request',
           jobId: event.jobId,
@@ -246,15 +293,39 @@ export class WebSocketHandler {
         for (const clientId of subscribers) {
           const client = this.clients.get(clientId);
           if (client) {
+            console.log(`[WebSocket] Sending approval request to client ${clientId}`);
             this.sendMessage(client.ws, approvalMessage);
+          } else {
+            console.log(`[WebSocket] Client ${clientId} not found in clients map`);
+          }
+        }
+      } else if (event.type === 'agent.input_required') {
+        console.log(`[WebSocket] Processing user input request event`);
+        const inputMessage: ServerMessage = {
+          type: 'user_input_request',
+          jobId: event.jobId,
+          data: event.data
+        };
+
+        for (const clientId of subscribers) {
+          const client = this.clients.get(clientId);
+          if (client) {
+            console.log(`[WebSocket] Sending user input request to client ${clientId}`);
+            this.sendMessage(client.ws, inputMessage);
+          } else {
+            console.log(`[WebSocket] Client ${clientId} not found in clients map`);
           }
         }
       } else {
         // Send regular event to all subscribers
+        console.log(`[WebSocket] Sending event type ${event.type} to ${subscribers.size} subscribers`);
         for (const clientId of subscribers) {
           const client = this.clients.get(clientId);
           if (client) {
+            console.log(`[WebSocket] Sending event to client ${clientId}`);
             this.sendMessage(client.ws, message);
+          } else {
+            console.log(`[WebSocket] Client ${clientId} not found in clients map`);
           }
         }
       }
@@ -263,7 +334,16 @@ export class WebSocketHandler {
 
   private sendMessage(ws: WebSocket, message: ServerMessage): void {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
+      const messageStr = JSON.stringify(message);
+      console.log(`[WebSocket] Sending message to client:`, {
+        type: message.type,
+        jobId: message.jobId,
+        messageLength: messageStr.length,
+        preview: messageStr.substring(0, 200) + (messageStr.length > 200 ? '...' : '')
+      });
+      ws.send(messageStr);
+    } else {
+      console.log(`[WebSocket] Cannot send message, WebSocket state is ${ws.readyState} (not OPEN)`);
     }
   }
 

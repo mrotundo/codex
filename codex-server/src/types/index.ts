@@ -35,6 +35,7 @@ export enum EventType {
   // Agent events
   AGENT_THINKING = 'agent.thinking',
   AGENT_MESSAGE = 'agent.message',
+  AGENT_INPUT_REQUIRED = 'agent.input_required',
   
   // Tool events
   TOOL_EXECUTING = 'tool.executing',
@@ -79,15 +80,27 @@ export interface ApprovalResponse {
   respondedAt: Date;
 }
 
+export interface UserInputRequest {
+  inputId: string;
+  prompt: string;
+  context?: string;
+}
+
+export interface UserInputResponse {
+  inputId: string;
+  response: string;
+  respondedAt: Date;
+}
+
 // WebSocket message types
 export interface ClientMessage {
-  type: 'subscribe' | 'unsubscribe' | 'approval_response' | 'cancel_job' | 'ping';
+  type: 'subscribe' | 'unsubscribe' | 'approval_response' | 'cancel_job' | 'ping' | 'user_response';
   jobId?: string;
   data?: any;
 }
 
 export interface ServerMessage {
-  type: 'event' | 'approval_request' | 'connection_ack' | 'error' | 'pong';
+  type: 'event' | 'approval_request' | 'user_input_request' | 'connection_ack' | 'error' | 'pong';
   jobId?: string;
   data: any;
 }

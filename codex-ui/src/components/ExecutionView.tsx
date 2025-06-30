@@ -6,6 +6,7 @@ import { Terminal } from './Terminal';
 import { CodeDisplay } from './CodeDisplay';
 import { JobStatus } from './JobStatus';
 import { ApprovalDialog } from './ApprovalDialog';
+import { UserInputDialog } from './UserInputDialog';
 import {
   Tab,
   Tabs,
@@ -30,11 +31,22 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ jobId }) => {
     currentJob,
     events,
     pendingApproval,
+    pendingUserInput,
     isConnected,
     connectToJob,
     disconnectFromJob,
     handleApproval,
+    handleUserResponse,
   } = useJobStore();
+
+  // Log events whenever they change
+  useEffect(() => {
+    console.log(`[ExecutionView] Events updated for job ${jobId}:`, {
+      eventCount: events.length,
+      eventTypes: events.map(e => e.type),
+      isConnected
+    });
+  }, [events, jobId, isConnected]);
 
   const [activeTab, setActiveTab] = React.useState(0);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
@@ -140,6 +152,16 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ jobId }) => {
           approval={pendingApproval}
           onDecision={(decision, comment) => {
             handleApproval(decision, comment);
+          }}
+        />
+      )}
+
+      {/* User Input Dialog */}
+      {pendingUserInput && (
+        <UserInputDialog
+          inputRequest={pendingUserInput}
+          onSubmit={(response) => {
+            handleUserResponse(response);
           }}
         />
       )}

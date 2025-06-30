@@ -20,38 +20,49 @@ export class WebSocketClient {
     // Use the backend port directly for WebSocket connection
     const host = window.location.hostname + ':4133';
     this.url = `${protocol}//${host}/ws`;
-    console.log('WebSocket URL:', this.url);
+    console.log('[WebSocket Client] Initialized with URL:', this.url);
   }
 
   connect(jobId?: string): void {
+    console.log(`[WebSocket Client] Connect called with jobId: ${jobId}`);
+    
     if (this.ws?.readyState === WebSocket.OPEN) {
+      console.log('[WebSocket Client] Already connected, subscribing to job');
       if (jobId) {
         this.subscribe(jobId);
       }
       return;
     }
 
+    console.log('[WebSocket Client] Creating new WebSocket connection');
     this.isIntentionallyClosed = false;
     this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
-      console.log('WebSocket connected');
+      console.log('[WebSocket Client] WebSocket opened successfully');
       this.reconnectAttempts = 0;
       this.notifyConnectionHandlers(true);
       this.startPingInterval();
 
       if (jobId) {
+        console.log(`[WebSocket Client] Subscribing to job ${jobId} after connection`);
         this.subscribe(jobId);
       }
     };
 
     this.ws.onmessage = (event) => {
+      console.log('[WebSocket Client] Raw message received:', event.data);
       try {
         const message: ServerMessage = JSON.parse(event.data);
-        console.log('WebSocket received message:', message);
+        console.log('[WebSocket Client] Parsed message:', {
+          type: message.type,
+          jobId: message.jobId,
+          hasData: !!message.data,
+          dataKeys: message.data ? Object.keys(message.data) : []
+        });
         this.handleMessage(message);
       } catch (error) {
-        console.error('Failed to parse WebSocket message:', error);
+        console.error('[WebSocket Client] Failed to parse WebSocket message:', error);
       }
     };
 
@@ -86,6 +97,7 @@ export class WebSocketClient {
   }
 
   subscribe(jobId: string): void {
+    console.log(`[WebSocket Client] Subscribing to job ${jobId}`);
     this.send({
       type: 'subscribe',
       jobId
@@ -107,6 +119,17 @@ export class WebSocketClient {
         approvalId,
         decision,
         comment
+      }
+    });
+  }
+
+  sendUserResponse(jobId: string, inputId: string, response: string): void {
+    this.send({
+      type: 'user_response',
+      jobId,
+      data: {
+        inputId,
+        response
       }
     });
   }
@@ -149,11 +172,13 @@ export class WebSocketClient {
   }
 
   private handleMessage(message: ServerMessage): void {
-    this.messageHandlers.forEach(handler => {
+    console.log(`[WebSocket Client] Handling message, notifying ${this.messageHandlers.size} handlers`);
+    this.messageHandlers.forEach((handler, index) => {
       try {
+        console.log(`[WebSocket Client] Calling handler ${index + 1}/${this.messageHandlers.size}`);
         handler(message);
       } catch (error) {
-        console.error('Error in message handler:', error);
+        console.error('[WebSocket Client] Error in message handler:', error);
       }
     });
   }

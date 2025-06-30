@@ -93,9 +93,17 @@ export const Terminal: React.FC<TerminalProps> = ({ events }) => {
     term.writeln('');
 
     // Process all events
-    console.log(`Terminal: Processing ${events.length} events`);
-    events.forEach((event) => {
-      console.log(`Terminal: Processing event type ${event.type}`, event.data);
+    console.log(`[Terminal] Processing ${events.length} events`);
+    console.log(`[Terminal] Events:`, events.map(e => ({ type: e.type, id: e.id })));
+    
+    events.forEach((event, index) => {
+      console.log(`[Terminal] Processing event ${index + 1}/${events.length}:`, {
+        type: event.type,
+        id: event.id,
+        hasData: !!event.data,
+        dataKeys: event.data ? Object.keys(event.data) : []
+      });
+      
       switch (event.type) {
         case EventType.TOOL_EXECUTING:
           if (event.data.command) {

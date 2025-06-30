@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Job, Event, ApprovalRequest } from '../types';
+import { Job, Event, ApprovalRequest, UserInputRequest } from '../types';
 import { jobsApi } from '../services/api';
 import { wsClient } from '../services/websocket';
 
@@ -8,6 +8,7 @@ interface JobState {
   currentJob: Job | null;
   events: Event[];
   pendingApproval: ApprovalRequest | null;
+  pendingUserInput: UserInputRequest | null;
   
   // Job list
   jobs: Job[];
@@ -28,10 +29,12 @@ interface JobState {
   connectToJob: (jobId: string) => void;
   disconnectFromJob: () => void;
   handleApproval: (decision: 'approve' | 'reject' | 'always', comment?: string) => void;
+  handleUserResponse: (response: string) => void;
   
   // Event handlers
   addEvent: (event: Event) => void;
   setPendingApproval: (approval: ApprovalRequest | null) => void;
+  setPendingUserInput: (input: UserInputRequest | null) => void;
   setConnected: (connected: boolean) => void;
   clearError: () => void;
 }
@@ -41,6 +44,7 @@ export const useJobStore = create<JobState>((set, get) => ({
   currentJob: null,
   events: [],
   pendingApproval: null,
+  pendingUserInput: null,
   jobs: [],
   totalJobs: 0,
   isLoading: false,
@@ -118,11 +122,24 @@ export const useJobStore = create<JobState>((set, get) => ({
 
   // Connect to job via WebSocket
   connectToJob: (jobId: string) => {
+    console.log(`[JobStore] Connecting to job ${jobId}`);
+    
     // Setup WebSocket message handler
     const unsubscribeMessage = wsClient.onMessage((message) => {
+      console.log(`[JobStore] Received message:`, {
+        type: message.type,
+        jobId: message.jobId,
+        hasData: !!message.data
+      });
+      
       switch (message.type) {
         case 'event':
           if (message.data) {
+            console.log(`[JobStore] Processing event:`, {
+              eventType: message.data.type,
+              eventId: message.data.id,
+              jobId: message.data.jobId
+            });
             get().addEvent(message.data);
             
             // Update job status based on events
@@ -130,12 +147,14 @@ export const useJobStore = create<JobState>((set, get) => ({
                 message.data.type === 'job.failed' ||
                 message.data.type === 'job.cancelled') {
               const status = message.data.type.split('.')[1] as Job['status'];
+              console.log(`[JobStore] Updating job status to: ${status}`);
               set(state => ({
                 currentJob: state.currentJob 
                   ? { ...state.currentJob, status, completedAt: new Date() }
                   : null
               }));
             } else if (message.data.type === 'job.started') {
+              console.log(`[JobStore] Updating job status to: running`);
               set(state => ({
                 currentJob: state.currentJob 
                   ? { ...state.currentJob, status: 'running', startedAt: new Date() }
@@ -146,16 +165,26 @@ export const useJobStore = create<JobState>((set, get) => ({
           break;
           
         case 'approval_request':
+          console.log(`[JobStore] Received approval request`);
           set({ pendingApproval: message.data });
           break;
           
+        case 'user_input_request':
+          console.log(`[JobStore] Received user input request`);
+          set({ pendingUserInput: message.data });
+          break;
+          
         case 'connection_ack':
-          console.log('Connected to job:', message.data);
+          console.log('[JobStore] Connected to job:', message.data);
           break;
           
         case 'error':
+          console.error('[JobStore] Error:', message.data.error);
           set({ error: message.data.error });
           break;
+          
+        default:
+          console.warn(`[JobStore] Unknown message type: ${message.type}`);
       }
     });
 
@@ -165,6 +194,7 @@ export const useJobStore = create<JobState>((set, get) => ({
     });
 
     // Connect and subscribe
+    console.log(`[JobStore] Calling wsClient.connect with jobId: ${jobId}`);
     wsClient.connect(jobId);
 
     // Store unsubscribe functions for cleanup
@@ -211,16 +241,48 @@ export const useJobStore = create<JobState>((set, get) => ({
     set({ pendingApproval: null });
   },
 
+  // Handle user response
+  handleUserResponse: (response: string) => {
+    const { currentJob, pendingUserInput } = get();
+    
+    if (!currentJob || !pendingUserInput) {
+      console.error('Cannot handle user response: currentJob or pendingUserInput is missing');
+      return;
+    }
+    
+    console.log(`Sending user response: jobId=${currentJob.id}, inputId=${pendingUserInput.inputId}`);
+    
+    wsClient.sendUserResponse(
+      currentJob.id,
+      pendingUserInput.inputId,
+      response
+    );
+    
+    // Clear pending user input
+    set({ pendingUserInput: null });
+  },
+
   // Add event to the list
   addEvent: (event: Event) => {
+    console.log(`[JobStore] Adding event to state:`, {
+      eventType: event.type,
+      eventId: event.id,
+      currentEventCount: get().events.length
+    });
     set(state => ({
       events: [...state.events, event]
     }));
+    console.log(`[JobStore] Event added, total events: ${get().events.length}`);
   },
 
   // Set pending approval
   setPendingApproval: (approval: ApprovalRequest | null) => {
     set({ pendingApproval: approval });
+  },
+
+  // Set pending user input
+  setPendingUserInput: (input: UserInputRequest | null) => {
+    set({ pendingUserInput: input });
   },
 
   // Set connection status

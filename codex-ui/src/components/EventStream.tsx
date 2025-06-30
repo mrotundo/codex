@@ -14,6 +14,7 @@ import {
   Warning as WarningIcon,
   HourglassEmpty as HourglassIcon,
   AutoAwesome as AutoAwesomeIcon,
+  QuestionAnswer as QuestionAnswerIcon,
 } from '@mui/icons-material';
 
 interface EventStreamProps {
@@ -32,6 +33,8 @@ const getEventIcon = (type: EventType) => {
       return <PsychologyIcon className="text-accent-secondary animate-pulse" />;
     case EventType.AGENT_MESSAGE:
       return <InfoIcon className="text-blue-400" />;
+    case EventType.AGENT_INPUT_REQUIRED:
+      return <QuestionAnswerIcon className="text-accent-warning animate-pulse" />;
     case EventType.TOOL_EXECUTING:
       return <TerminalIcon className="text-yellow-400" />;
     case EventType.TOOL_COMPLETED:
@@ -54,6 +57,7 @@ const getEventColor = (type: EventType) => {
     case EventType.TOOL_COMPLETED:
       return 'border-accent-success/50 bg-accent-success/10';
     case EventType.APPROVAL_REQUIRED:
+    case EventType.AGENT_INPUT_REQUIRED:
       return 'border-accent-warning/50 bg-accent-warning/10';
     case EventType.AGENT_THINKING:
       return 'border-accent-secondary/50 bg-accent-secondary/10';
@@ -177,6 +181,21 @@ export const EventStream: React.FC<EventStreamProps> = ({ events }) => {
                   <div className="flex items-center space-x-2">
                     <span>{event.data.message}</span>
                     <span className="loading-dots text-accent-secondary"></span>
+                  </div>
+                )}
+
+                {event.type === EventType.AGENT_INPUT_REQUIRED && (
+                  <div className="bg-accent-warning/20 p-3 rounded">
+                    <div className="font-medium mb-1">Agent Needs Your Input</div>
+                    <div className="text-xs text-gray-300">
+                      {event.data.prompt}
+                      {event.data.context && (
+                        <div className="mt-1 text-gray-400">{event.data.context}</div>
+                      )}
+                    </div>
+                    <div className="mt-2 text-xs text-gray-400">
+                      Waiting for user response...
+                    </div>
                   </div>
                 )}
 

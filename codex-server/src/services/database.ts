@@ -194,10 +194,20 @@ export class DatabaseService {
     const { id, jobId, type, data } = event;
     const timestamp = new Date();
 
+    console.log(`[Database] Creating event:`, {
+      id,
+      jobId,
+      type,
+      dataKeys: data ? Object.keys(data) : [],
+      timestamp: timestamp.toISOString()
+    });
+
     await this.db.run(
       `INSERT INTO events (id, job_id, type, data, timestamp) VALUES (?, ?, ?, ?, ?)`,
       [id, jobId, type, JSON.stringify(data), timestamp.toISOString()]
     );
+
+    console.log(`[Database] Event created successfully`);
 
     return { id, jobId, type, data, timestamp };
   }

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { Event, EventType, ServerMessage, ApprovalRequest } from '../types';
+import { Event, EventType, ServerMessage, ApprovalRequest, UserInputRequest } from '../types';
 import { db } from './database';
 
 export class EventBus extends EventEmitter {
@@ -18,13 +18,26 @@ export class EventBus extends EventEmitter {
       timestamp: new Date()
     };
 
+    console.log(`[EventBus] Emitting event:`, {
+      eventId: event.id,
+      jobId: event.jobId,
+      type: event.type,
+      dataKeys: data ? Object.keys(data) : [],
+      timestamp: event.timestamp
+    });
+
     // Store event in database
     await db.createEvent(event);
+    console.log(`[EventBus] Event stored in database`);
 
     // Emit to WebSocket listeners
+    const jobEventListeners = this.listenerCount('job-event');
+    console.log(`[EventBus] Emitting to ${jobEventListeners} 'job-event' listeners`);
     super.emit('job-event', event);
 
     // Emit job-specific event
+    const jobSpecificListeners = this.listenerCount(`job-${jobId}`);
+    console.log(`[EventBus] Emitting to ${jobSpecificListeners} 'job-${jobId}' listeners`);
     super.emit(`job-${jobId}`, event);
 
     return;
@@ -108,6 +121,53 @@ export class EventBus extends EventEmitter {
     const hasListeners = this.listenerCount(`approval-${approvalId}`) > 0;
     console.log(`EventBus: Has listeners for approval-${approvalId}: ${hasListeners}`);
     super.emit(`approval-${approvalId}`, decision);
+  }
+
+  async emitUserInputRequest(
+    jobId: string,
+    prompt: string,
+    context?: string
+  ): Promise<string> {
+    const inputId = uuidv4();
+    const inputRequest: UserInputRequest = {
+      inputId,
+      prompt,
+      context
+    };
+
+    // Emit user input request event
+    await this.emitEvent(jobId, EventType.AGENT_INPUT_REQUIRED, inputRequest);
+
+    return inputId;
+  }
+
+  async waitForUserResponse(inputId: string, timeout = 300000): Promise<string> {
+    console.log(`EventBus: Setting up user input listener for ${inputId}`);
+    
+    return new Promise((resolve, reject) => {
+      const handler = (response: string) => {
+        console.log(`EventBus: User input handler called with response`);
+        clearTimeout(timer);
+        resolve(response);
+      };
+
+      // Set up listener FIRST
+      this.once(`user-input-${inputId}`, handler);
+      console.log(`EventBus: Listener registered for user-input-${inputId}`);
+
+      const timer = setTimeout(() => {
+        console.log(`EventBus: User input timeout for ${inputId}`);
+        this.off(`user-input-${inputId}`, handler);
+        reject(new Error('User input timeout'));
+      }, timeout);
+    });
+  }
+
+  notifyUserResponse(inputId: string, response: string): void {
+    console.log(`EventBus: Notifying user response for ${inputId}`);
+    const hasListeners = this.listenerCount(`user-input-${inputId}`) > 0;
+    console.log(`EventBus: Has listeners for user-input-${inputId}: ${hasListeners}`);
+    super.emit(`user-input-${inputId}`, response);
   }
 }
 

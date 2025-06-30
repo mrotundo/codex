@@ -5,6 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:node22": "./start-dev.sh",
     "build": "tsc",
     "start": "node dist/server.js",
     "db:init": "tsx src/services/database.ts init",
